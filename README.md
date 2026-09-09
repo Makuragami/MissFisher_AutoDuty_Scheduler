@@ -29,10 +29,19 @@ MissFisher 内部接口可能随版本变化。升级 MissFisher 后如果恢复
 
 ## 下载与安装
 
-1. 下载 [FisherDutyScheduler 0.6.0](release/FisherDutyScheduler-0.6.0.zip) 并解压到固定目录。
-2. 打开 Dalamud 设置的“测试版”页面，将解压后的 `FisherDutyScheduler.dll` 添加为开发插件。
-3. 在插件列表中启用 **Fisher Duty Scheduler**。
+推荐通过 Dalamud 自定义插件仓库安装：
+
+1. 打开 Dalamud 设置的“测试版”页面。
+2. 在“自定义插件仓库”中添加以下地址并保存：
+
+   ```text
+   https://raw.githubusercontent.com/Makuragami/MissFisher_AutoDuty_Scheduler/refs/heads/main/repo.json
+   ```
+
+3. 打开插件安装器，搜索并安装 **Fisher Duty Scheduler**。
 4. 输入 `/fds` 打开配置窗口。
+
+也可以下载 [FisherDutyScheduler 0.6.0](release/FisherDutyScheduler-0.6.0.zip)，解压后将 `FisherDutyScheduler.dll` 添加为开发插件。
 
 首次使用时建议保持“只观察”开启，确认插件显示的 MissFisher 剩余时间和触发状态正确，再进行受监督测试。
 
