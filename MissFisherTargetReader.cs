@@ -1,0 +1,342 @@
+using System.Reflection;
+using System.Collections;
+
+namespace FisherDutyScheduler;
+
+internal sealed record MissFisherResumeOption(
+    MissFisherResumeKind Kind,
+    string Key,
+    string Name,
+    string Label);
+
+internal sealed class MissFisherTargetReader
+{
+    public string Status { get; private set; } = "尚未探测";
+
+    private Assembly? missFisherAssembly;
+    private FieldInfo? checklistRunnerField;
+    private PropertyInfo? currentTargetProperty;
+    private MethodInfo? timingMethod;
+    private MethodInfo? windowStartMethod;
+    private MethodInfo? startCustomChecklistMethod;
+    private MethodInfo? startAlbumMethod;
+    private MethodInfo? startFishLogMethod;
+    private MethodInfo? startSucceededMethod;
+    private MethodInfo? startFailureMessageMethod;
+    private IReadOnlyList<MissFisherResumeOption> cachedResumeOptions = [];
+    private DateTime resumeOptionsValidUntilUtc = DateTime.MinValue;
+
+    public bool TryGetCurrentTargetWindowStart(out DateTimeOffset windowStart)
+    {
+        windowStart = default;
+
+        try
+        {
+            var assembly = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            if (assembly is null)
+            {
+                Status = "MissFisher 未加载";
+                return false;
+            }
+
+            if (assembly != missFisherAssembly && !ResolveMembers(assembly))
+            {
+                Status = "当前 MissFisher 版本不兼容精确目标读取";
+                return false;
+            }
+
+            var runner = checklistRunnerField?.GetValue(null);
+            var target = runner is null ? null : currentTargetProperty?.GetValue(runner);
+            var timing = target is null ? null : timingMethod?.Invoke(target, null);
+            var value = timing is null ? null : windowStartMethod?.Invoke(timing, null);
+            if (value is not DateTimeOffset start)
+            {
+                Status = "兼容，当前没有可冻结的目标窗口";
+                return false;
+            }
+
+            windowStart = start;
+            Status = "兼容，使用 MissFisher 当前目标窗口";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Status = $"精确目标读取失败：{ex.GetType().Name}";
+            ClearMembers();
+            return false;
+        }
+    }
+
+    public bool TryStartResumeTarget(
+        MissFisherResumeKind kind,
+        string key,
+        string name,
+        out string failureMessage)
+    {
+        failureMessage = string.Empty;
+
+        try
+        {
+            var assembly = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            if (assembly is null)
+            {
+                Status = "MissFisher 未加载";
+                failureMessage = "MissFisher 程序集尚未加载";
+                return false;
+            }
+
+            if (assembly != missFisherAssembly && !ResolveMembers(assembly))
+            {
+                Status = "当前 MissFisher 版本不兼容恢复目标启动";
+                failureMessage = "当前 MissFisher 版本没有兼容的恢复目标启动入口";
+                return false;
+            }
+
+            object? result;
+            switch (kind)
+            {
+                case MissFisherResumeKind.FishLog:
+                    result = startFishLogMethod?.Invoke(null, null);
+                    break;
+                case MissFisherResumeKind.Album:
+                    if (string.IsNullOrWhiteSpace(key))
+                    {
+                        failureMessage = "MissFisher 分组标识为空";
+                        return false;
+                    }
+                    result = startAlbumMethod?.Invoke(null, [key, name]);
+                    break;
+                case MissFisherResumeKind.Collection:
+                    if (!Guid.TryParse(key, out var checklistId))
+                    {
+                        failureMessage = "MissFisher 合集 ID 无效";
+                        return false;
+                    }
+                    result = startCustomChecklistMethod?.Invoke(null, [checklistId, name]);
+                    break;
+                default:
+                    failureMessage = "未知的 MissFisher 恢复目标类型";
+                    return false;
+            }
+
+            if (result is null || startSucceededMethod?.Invoke(result, null) is not true)
+            {
+                failureMessage = result is null
+                    ? "MissFisher 未返回启动结果"
+                    : startFailureMessageMethod?.Invoke(result, null) as string ?? "MissFisher 拒绝启动该清单";
+                return false;
+            }
+
+            return true;
+        }
+        catch (TargetInvocationException ex)
+        {
+            Status = $"清单启动失败：{ex.InnerException?.GetType().Name ?? ex.GetType().Name}";
+            failureMessage = ex.InnerException?.Message ?? ex.Message;
+            ClearMembers();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Status = $"清单启动失败：{ex.GetType().Name}";
+            failureMessage = ex.Message;
+            ClearMembers();
+            return false;
+        }
+    }
+
+    public bool TryGetResumeOptions(out IReadOnlyList<MissFisherResumeOption> options)
+    {
+        options = cachedResumeOptions;
+        if (DateTime.UtcNow < resumeOptionsValidUntilUtc && cachedResumeOptions.Count > 0)
+            return true;
+
+        try
+        {
+            var assembly = AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            if (assembly is null)
+            {
+                Status = "MissFisher 未加载";
+                return false;
+            }
+
+            if (assembly != missFisherAssembly && !ResolveMembers(assembly))
+            {
+                Status = "当前 MissFisher 版本不兼容恢复目标读取";
+                return false;
+            }
+
+            var discovered = new List<MissFisherResumeOption>
+            {
+                new(MissFisherResumeKind.FishLog, "fish-log", "鱼类图鉴（非副本）", "图鉴：鱼类图鉴（非副本）"),
+            };
+
+            AddAlbumOptions(assembly, discovered);
+            AddCollectionOptions(assembly, discovered);
+            cachedResumeOptions = discovered;
+            resumeOptionsValidUntilUtc = DateTime.UtcNow.AddSeconds(5);
+            options = cachedResumeOptions;
+            Status = $"兼容，已读取 {discovered.Count} 个恢复目标";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Status = $"恢复目标读取失败：{ex.GetType().Name}";
+            resumeOptionsValidUntilUtc = DateTime.UtcNow.AddSeconds(5);
+            return false;
+        }
+    }
+
+    private static void AddAlbumOptions(Assembly assembly, List<MissFisherResumeOption> options)
+    {
+        var stateType = assembly.GetType("G.Gp") ?? throw new MissingMemberException("G.Gp");
+        var state = GetParameterlessMethod(assembly.GetType("G.GN"), "B", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, null);
+        var catalog = assembly.GetType("G.GE")?.GetMethod(
+                "A",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                binder: null,
+                types: [stateType],
+                modifiers: null)
+            ?.Invoke(null, [state]);
+        var groups = GetParameterlessMethod(
+                catalog?.GetType(),
+                "c",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Invoke(catalog, null) as IEnumerable;
+        if (groups is null)
+            throw new MissingMemberException("MissFisher 内置分组列表");
+
+        foreach (var group in groups)
+        {
+            if (group is null)
+                continue;
+            var rawName = GetParameterlessMethod(group.GetType(), "a", BindingFlags.Instance | BindingFlags.Public)
+                .Invoke(group, null) as string;
+            var displayName = GetParameterlessMethod(group.GetType(), "b", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(group, null) as string;
+            if (string.IsNullOrWhiteSpace(rawName))
+                continue;
+            displayName = string.IsNullOrWhiteSpace(displayName) ? rawName : displayName;
+            options.Add(new(MissFisherResumeKind.Album, $"section:{rawName}", displayName, $"分组：{displayName}"));
+        }
+    }
+
+    private static void AddCollectionOptions(Assembly assembly, List<MissFisherResumeOption> options)
+    {
+        var plugin = GetParameterlessMethod(assembly.GetType("MissFisher.App.Plugin"), "A", BindingFlags.Static | BindingFlags.NonPublic)
+            .Invoke(null, null);
+        var manager = GetParameterlessMethod(plugin?.GetType(), "n", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(plugin, null);
+        var collections = GetParameterlessMethod(manager?.GetType(), "A", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(manager, null) as IEnumerable;
+        if (collections is null)
+            throw new MissingMemberException("MissFisher 自定义合集列表");
+
+        foreach (var collection in collections)
+        {
+            if (collection is null)
+                continue;
+            var id = collection.GetType().GetProperty("baS", BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection);
+            var name = collection.GetType().GetProperty("bas", BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection) as string;
+            if (id is not Guid checklistId || string.IsNullOrWhiteSpace(name))
+                continue;
+            options.Add(new(MissFisherResumeKind.Collection, checklistId.ToString(), name, $"合集：{name}"));
+        }
+    }
+
+    private static MethodInfo GetParameterlessMethod(Type? type, string name, BindingFlags flags) =>
+        type?.GetMethod(name, flags, binder: null, types: Type.EmptyTypes, modifiers: null)
+        ?? throw new MissingMemberException(type?.FullName ?? "unknown", name);
+
+    private bool ResolveMembers(Assembly assembly)
+    {
+        ClearMembers();
+
+        var bridgeType = assembly.GetType("E.EL");
+        checklistRunnerField = bridgeType?.GetField("YI", BindingFlags.Static | BindingFlags.NonPublic);
+        var runnerType = checklistRunnerField?.FieldType;
+        currentTargetProperty = runnerType?.GetProperty("bCp", BindingFlags.Instance | BindingFlags.NonPublic);
+        var targetType = currentTargetProperty?.PropertyType;
+        timingMethod = targetType?.GetMethod(
+            "f",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+        var timingType = timingMethod?.ReturnType;
+        windowStartMethod = timingType?.GetMethod(
+            "B",
+            BindingFlags.Instance | BindingFlags.Public,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+        startCustomChecklistMethod = bridgeType?.GetMethod(
+            "A",
+            BindingFlags.Static | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(Guid), typeof(string)],
+            modifiers: null);
+        startAlbumMethod = bridgeType?.GetMethod(
+            "A",
+            BindingFlags.Static | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(string), typeof(string)],
+            modifiers: null);
+        startFishLogMethod = bridgeType?.GetMethod(
+            "e",
+            BindingFlags.Static | BindingFlags.NonPublic,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+        var startResultType = startCustomChecklistMethod?.ReturnType;
+        startSucceededMethod = startResultType?.GetMethod(
+            "A",
+            BindingFlags.Instance | BindingFlags.Public,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+        startFailureMessageMethod = startResultType?.GetMethod(
+            "a",
+            BindingFlags.Instance | BindingFlags.Public,
+            binder: null,
+            types: Type.EmptyTypes,
+            modifiers: null);
+
+        if (checklistRunnerField is null
+            || currentTargetProperty is null
+            || timingMethod is null
+            || windowStartMethod is null
+            || startCustomChecklistMethod is null
+            || startAlbumMethod is null
+            || startFishLogMethod is null
+            || startSucceededMethod is null
+            || startFailureMessageMethod is null)
+        {
+            ClearMembers();
+            return false;
+        }
+
+        missFisherAssembly = assembly;
+        return true;
+    }
+
+    private void ClearMembers()
+    {
+        missFisherAssembly = null;
+        checklistRunnerField = null;
+        currentTargetProperty = null;
+        timingMethod = null;
+        windowStartMethod = null;
+        startCustomChecklistMethod = null;
+        startAlbumMethod = null;
+        startFishLogMethod = null;
+        startSucceededMethod = null;
+        startFailureMessageMethod = null;
+        cachedResumeOptions = [];
+        resumeOptionsValidUntilUtc = DateTime.MinValue;
+    }
+}

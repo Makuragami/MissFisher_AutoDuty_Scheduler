@@ -1,0 +1,12 @@
+{
+  "Author": "makuragami",
+  "Name": "Fisher Duty Scheduler",
+  "InternalName": "FisherDutyScheduler",
+  "Punchline": "Coordinates AutoDuty with MissFisher fishing gaps.",
+  "Description": "Uses suitable MissFisher fishing gaps for AutoDuty activity, then restores the selected fishing target.",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false
+}
