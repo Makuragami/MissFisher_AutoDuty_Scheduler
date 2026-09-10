@@ -14,7 +14,8 @@ internal sealed class MissFisherTargetReader
     private enum ReflectionSchema
     {
         Version224,
-        Version230,
+        Version2301,
+        Version2302,
     }
 
     public string Status { get; private set; } = "尚未探测";
@@ -199,9 +200,14 @@ internal sealed class MissFisherTargetReader
         ReflectionSchema schema,
         List<MissFisherResumeOption> options)
     {
-        var modern = schema == ReflectionSchema.Version230;
+        var modern = schema != ReflectionSchema.Version224;
         var stateTypeName = modern ? "G.Gy" : "G.Gp";
-        var stateProviderName = modern ? "G.GV" : "G.GN";
+        var stateProviderName = schema switch
+        {
+            ReflectionSchema.Version2302 => "G.Gv",
+            ReflectionSchema.Version2301 => "G.GV",
+            _ => "G.GN",
+        };
         var catalogProviderName = modern ? "G.GM" : "G.GE";
         var stateType = assembly.GetType(stateTypeName) ?? throw new MissingMemberException(stateTypeName);
         var state = GetParameterlessMethod(
@@ -246,9 +252,19 @@ internal sealed class MissFisherTargetReader
     {
         var plugin = GetParameterlessMethod(assembly.GetType("MissFisher.App.Plugin"), "A", BindingFlags.Static | BindingFlags.NonPublic)
             .Invoke(null, null);
-        var managerMethodName = schema == ReflectionSchema.Version230 ? "O" : "n";
-        var idPropertyName = schema == ReflectionSchema.Version230 ? "bDl" : "baS";
-        var namePropertyName = schema == ReflectionSchema.Version230 ? "bDM" : "bas";
+        var managerMethodName = schema == ReflectionSchema.Version224 ? "n" : "O";
+        var idPropertyName = schema switch
+        {
+            ReflectionSchema.Version2302 => "bDT",
+            ReflectionSchema.Version2301 => "bDl",
+            _ => "baS",
+        };
+        var namePropertyName = schema switch
+        {
+            ReflectionSchema.Version2302 => "bDt",
+            ReflectionSchema.Version2301 => "bDM",
+            _ => "bas",
+        };
         var manager = GetParameterlessMethod(plugin?.GetType(), managerMethodName, BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(plugin, null);
         var collections = GetParameterlessMethod(manager?.GetType(), "A", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -286,15 +302,21 @@ internal sealed class MissFisherTargetReader
         ClearMembers();
 
         var modernBridgeType = assembly.GetType("E.EP");
-        var modern = modernBridgeType?.GetField("yF", BindingFlags.Static | BindingFlags.NonPublic) is not null;
-        reflectionSchema = modern ? ReflectionSchema.Version230 : ReflectionSchema.Version224;
+        var modern2302 = modernBridgeType?.GetField("yf", BindingFlags.Static | BindingFlags.NonPublic) is not null;
+        var modern2301 = modernBridgeType?.GetField("yF", BindingFlags.Static | BindingFlags.NonPublic) is not null;
+        reflectionSchema = modern2302
+            ? ReflectionSchema.Version2302
+            : modern2301
+                ? ReflectionSchema.Version2301
+                : ReflectionSchema.Version224;
+        var modern = modern2302 || modern2301;
         var bridgeType = modern ? modernBridgeType : assembly.GetType("E.EL");
         checklistRunnerField = bridgeType?.GetField(
-            modern ? "yF" : "YI",
+            modern2302 ? "yf" : modern2301 ? "yF" : "YI",
             BindingFlags.Static | BindingFlags.NonPublic);
         var runnerType = checklistRunnerField?.FieldType;
         currentTargetProperty = runnerType?.GetProperty(
-            modern ? "beM" : "bCp",
+            modern2302 ? "bet" : modern2301 ? "beM" : "bCp",
             BindingFlags.Instance | BindingFlags.NonPublic);
         var targetType = currentTargetProperty?.PropertyType;
         timingMethod = targetType?.GetMethod(
