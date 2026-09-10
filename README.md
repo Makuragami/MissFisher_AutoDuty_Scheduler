@@ -21,7 +21,7 @@
 ## 依赖
 
 - XIVLauncherCN / Dalamud API 15
-- MissFisher 2.2.4.1
+- MissFisher 2.2.4.1 或 2.3.0.1
 - AutoDuty
 - vnavmesh，以及 AutoDuty 正常运行所需的战斗与路径插件
 
@@ -41,7 +41,7 @@ MissFisher 内部接口可能随版本变化。升级 MissFisher 后如果恢复
 3. 打开插件安装器，搜索并安装 **Fisher Duty Scheduler**。
 4. 输入 `/fds` 打开配置窗口。
 
-也可以下载 [FisherDutyScheduler 0.6.0](release/FisherDutyScheduler-0.6.0.zip)，解压后将 `FisherDutyScheduler.dll` 添加为开发插件。
+也可以下载 [FisherDutyScheduler 0.6.1](release/FisherDutyScheduler-0.6.1.zip)，解压后将 `FisherDutyScheduler.dll` 添加为开发插件。
 
 首次使用时建议保持“只观察”开启，确认插件显示的 MissFisher 剩余时间和触发状态正确，再进行受监督测试。
 

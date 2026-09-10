@@ -11,9 +11,16 @@ internal sealed record MissFisherResumeOption(
 
 internal sealed class MissFisherTargetReader
 {
+    private enum ReflectionSchema
+    {
+        Version224,
+        Version230,
+    }
+
     public string Status { get; private set; } = "尚未探测";
 
     private Assembly? missFisherAssembly;
+    private ReflectionSchema? reflectionSchema;
     private FieldInfo? checklistRunnerField;
     private PropertyInfo? currentTargetProperty;
     private MethodInfo? timingMethod;
@@ -32,8 +39,7 @@ internal sealed class MissFisherTargetReader
 
         try
         {
-            var assembly = AppDomain.CurrentDomain.GetAssemblies()
-                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            var assembly = FindActiveMissFisherAssembly();
             if (assembly is null)
             {
                 Status = "MissFisher 未加载";
@@ -57,7 +63,7 @@ internal sealed class MissFisherTargetReader
             }
 
             windowStart = start;
-            Status = "兼容，使用 MissFisher 当前目标窗口";
+            Status = $"兼容 {GetAssemblyVersion(assembly)}，使用 MissFisher 当前目标窗口";
             return true;
         }
         catch (Exception ex)
@@ -78,8 +84,7 @@ internal sealed class MissFisherTargetReader
 
         try
         {
-            var assembly = AppDomain.CurrentDomain.GetAssemblies()
-                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            var assembly = FindActiveMissFisherAssembly();
             if (assembly is null)
             {
                 Status = "MissFisher 未加载";
@@ -155,8 +160,7 @@ internal sealed class MissFisherTargetReader
 
         try
         {
-            var assembly = AppDomain.CurrentDomain.GetAssemblies()
-                .FirstOrDefault(candidate => candidate.GetName().Name == "MissFisher");
+            var assembly = FindActiveMissFisherAssembly();
             if (assembly is null)
             {
                 Status = "MissFisher 未加载";
@@ -174,12 +178,12 @@ internal sealed class MissFisherTargetReader
                 new(MissFisherResumeKind.FishLog, "fish-log", "鱼类图鉴（非副本）", "图鉴：鱼类图鉴（非副本）"),
             };
 
-            AddAlbumOptions(assembly, discovered);
-            AddCollectionOptions(assembly, discovered);
+            AddAlbumOptions(assembly, reflectionSchema!.Value, discovered);
+            AddCollectionOptions(assembly, reflectionSchema.Value, discovered);
             cachedResumeOptions = discovered;
             resumeOptionsValidUntilUtc = DateTime.UtcNow.AddSeconds(5);
             options = cachedResumeOptions;
-            Status = $"兼容，已读取 {discovered.Count} 个恢复目标";
+            Status = $"兼容 {GetAssemblyVersion(assembly)}，已读取 {discovered.Count} 个恢复目标";
             return true;
         }
         catch (Exception ex)
@@ -190,14 +194,24 @@ internal sealed class MissFisherTargetReader
         }
     }
 
-    private static void AddAlbumOptions(Assembly assembly, List<MissFisherResumeOption> options)
+    private static void AddAlbumOptions(
+        Assembly assembly,
+        ReflectionSchema schema,
+        List<MissFisherResumeOption> options)
     {
-        var stateType = assembly.GetType("G.Gp") ?? throw new MissingMemberException("G.Gp");
-        var state = GetParameterlessMethod(assembly.GetType("G.GN"), "B", BindingFlags.Static | BindingFlags.NonPublic)
+        var modern = schema == ReflectionSchema.Version230;
+        var stateTypeName = modern ? "G.Gy" : "G.Gp";
+        var stateProviderName = modern ? "G.GV" : "G.GN";
+        var catalogProviderName = modern ? "G.GM" : "G.GE";
+        var stateType = assembly.GetType(stateTypeName) ?? throw new MissingMemberException(stateTypeName);
+        var state = GetParameterlessMethod(
+                assembly.GetType(stateProviderName),
+                "B",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
             .Invoke(null, null);
-        var catalog = assembly.GetType("G.GE")?.GetMethod(
+        var catalog = assembly.GetType(catalogProviderName)?.GetMethod(
                 "A",
-                BindingFlags.Static | BindingFlags.NonPublic,
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
                 binder: null,
                 types: [stateType],
                 modifiers: null)
@@ -225,11 +239,17 @@ internal sealed class MissFisherTargetReader
         }
     }
 
-    private static void AddCollectionOptions(Assembly assembly, List<MissFisherResumeOption> options)
+    private static void AddCollectionOptions(
+        Assembly assembly,
+        ReflectionSchema schema,
+        List<MissFisherResumeOption> options)
     {
         var plugin = GetParameterlessMethod(assembly.GetType("MissFisher.App.Plugin"), "A", BindingFlags.Static | BindingFlags.NonPublic)
             .Invoke(null, null);
-        var manager = GetParameterlessMethod(plugin?.GetType(), "n", BindingFlags.Instance | BindingFlags.NonPublic)
+        var managerMethodName = schema == ReflectionSchema.Version230 ? "O" : "n";
+        var idPropertyName = schema == ReflectionSchema.Version230 ? "bDl" : "baS";
+        var namePropertyName = schema == ReflectionSchema.Version230 ? "bDM" : "bas";
+        var manager = GetParameterlessMethod(plugin?.GetType(), managerMethodName, BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(plugin, null);
         var collections = GetParameterlessMethod(manager?.GetType(), "A", BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(manager, null) as IEnumerable;
@@ -240,8 +260,8 @@ internal sealed class MissFisherTargetReader
         {
             if (collection is null)
                 continue;
-            var id = collection.GetType().GetProperty("baS", BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection);
-            var name = collection.GetType().GetProperty("bas", BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection) as string;
+            var id = collection.GetType().GetProperty(idPropertyName, BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection);
+            var name = collection.GetType().GetProperty(namePropertyName, BindingFlags.Instance | BindingFlags.Public)?.GetValue(collection) as string;
             if (id is not Guid checklistId || string.IsNullOrWhiteSpace(name))
                 continue;
             options.Add(new(MissFisherResumeKind.Collection, checklistId.ToString(), name, $"合集：{name}"));
@@ -252,14 +272,30 @@ internal sealed class MissFisherTargetReader
         type?.GetMethod(name, flags, binder: null, types: Type.EmptyTypes, modifiers: null)
         ?? throw new MissingMemberException(type?.FullName ?? "unknown", name);
 
+    private static Assembly? FindActiveMissFisherAssembly() =>
+        AppDomain.CurrentDomain.GetAssemblies()
+            .Where(candidate => candidate.GetName().Name == "MissFisher")
+            .OrderByDescending(candidate => candidate.GetName().Version)
+            .FirstOrDefault();
+
+    private static string GetAssemblyVersion(Assembly assembly) =>
+        assembly.GetName().Version?.ToString() ?? "未知版本";
+
     private bool ResolveMembers(Assembly assembly)
     {
         ClearMembers();
 
-        var bridgeType = assembly.GetType("E.EL");
-        checklistRunnerField = bridgeType?.GetField("YI", BindingFlags.Static | BindingFlags.NonPublic);
+        var modernBridgeType = assembly.GetType("E.EP");
+        var modern = modernBridgeType?.GetField("yF", BindingFlags.Static | BindingFlags.NonPublic) is not null;
+        reflectionSchema = modern ? ReflectionSchema.Version230 : ReflectionSchema.Version224;
+        var bridgeType = modern ? modernBridgeType : assembly.GetType("E.EL");
+        checklistRunnerField = bridgeType?.GetField(
+            modern ? "yF" : "YI",
+            BindingFlags.Static | BindingFlags.NonPublic);
         var runnerType = checklistRunnerField?.FieldType;
-        currentTargetProperty = runnerType?.GetProperty("bCp", BindingFlags.Instance | BindingFlags.NonPublic);
+        currentTargetProperty = runnerType?.GetProperty(
+            modern ? "beM" : "bCp",
+            BindingFlags.Instance | BindingFlags.NonPublic);
         var targetType = currentTargetProperty?.PropertyType;
         timingMethod = targetType?.GetMethod(
             "f",
@@ -327,6 +363,7 @@ internal sealed class MissFisherTargetReader
     private void ClearMembers()
     {
         missFisherAssembly = null;
+        reflectionSchema = null;
         checklistRunnerField = null;
         currentTargetProperty = null;
         timingMethod = null;
