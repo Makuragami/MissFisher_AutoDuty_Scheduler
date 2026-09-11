@@ -19,6 +19,7 @@ internal sealed class PluginIpc
     private readonly ICallGateSubscriber<bool> autoDutyIsNavigating;
     private readonly ICallGateSubscriber<uint, bool> autoDutyContentHasPath;
     private readonly ICallGateSubscriber<object> autoDutyStop;
+    private readonly ICallGateSubscriber<string, string> autoDutyGetConfig;
     private DateTime nextMissFisherWarningUtc;
     private DateTime nextAutoDutyWarningUtc;
 
@@ -37,6 +38,7 @@ internal sealed class PluginIpc
         autoDutyIsNavigating = pluginInterface.GetIpcSubscriber<bool>("AutoDuty.IsNavigating");
         autoDutyContentHasPath = pluginInterface.GetIpcSubscriber<uint, bool>("AutoDuty.ContentHasPath");
         autoDutyStop = pluginInterface.GetIpcSubscriber<object>("AutoDuty.Stop");
+        autoDutyGetConfig = pluginInterface.GetIpcSubscriber<string, string>("AutoDuty.GetConfig");
     }
 
     public bool TryGetMissFisher(out MissFisherSnapshot snapshot)
@@ -112,6 +114,24 @@ internal sealed class PluginIpc
         {
             log.Error(ex, "AutoDuty ContentHasPath IPC failed for territory {TerritoryId}", territoryId);
             hasPath = false;
+            return false;
+        }
+    }
+
+    public bool TryGetAutoDutyRepairSettings(out bool selfRepair, out int thresholdPercent)
+    {
+        try
+        {
+            selfRepair = bool.TryParse(autoDutyGetConfig.InvokeFunc("AutoRepairSelf"), out var self) && self;
+            thresholdPercent = int.TryParse(autoDutyGetConfig.InvokeFunc("AutoRepairPct"), out var threshold)
+                ? Math.Clamp(threshold, 0, 99)
+                : 99;
+            return true;
+        }
+        catch
+        {
+            selfRepair = false;
+            thresholdPercent = 99;
             return false;
         }
     }

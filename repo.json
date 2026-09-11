@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "Fisher Duty Scheduler",
     "InternalName": "FisherDutyScheduler",
-    "AssemblyVersion": "0.6.2.0",
+    "AssemblyVersion": "0.7.0.0",
     "Description": "在 MissFisher 的钓鱼等待间隙调用 AutoDuty，并在时间不足或流程结束后恢复所选钓鱼目标。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisher_AutoDuty_Scheduler",
@@ -21,7 +21,7 @@
     "LoadPriority": 0,
     "Punchline": "协调 MissFisher 钓鱼间隙与 AutoDuty 的自动化调度插件。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.6.2\n- 兼容 MissFisher 2.3.0.2。\n- 修复精确窗口读取失效后无法利用钓鱼间隙的问题。\n- 修复恢复目标的内置分组和自定义合集读取。\n",
+    "ChangeLog": "# v0.7.0\n- 增加捕鱼装备耐久监控与自动维护。\n- 在安全钓鱼空档暂停 MissFisher，并调用 AutoDuty 的修理流程。\n- 修理完成后自动继续或重启所选钓鱼目标。\n",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisher_AutoDuty_Scheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisher_AutoDuty_Scheduler/refs/heads/main/latest.zip"
   }

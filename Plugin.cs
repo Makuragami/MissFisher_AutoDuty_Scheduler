@@ -55,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
     private MissFisherSnapshot? lastMissFisher;
     private double? lastResolvedRemainingSeconds;
     private string lastWindowTimeSource = "尚未读取";
+    private float? lowestFisherGearPercent;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
@@ -92,7 +93,8 @@ public sealed class Plugin : IDalamudPlugin
                 configuration.MissFisherResumeKind = MissFisherResumeKind.Collection;
             }
         }
-        configuration.Version = 4;
+        configuration.FisherRepairThresholdPercent = Math.Clamp(configuration.FisherRepairThresholdPercent, 1, 99);
+        configuration.Version = 5;
         configuration.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
         jobSelector = new JobSelector(dataManager, playerState);
@@ -179,6 +181,7 @@ public sealed class Plugin : IDalamudPlugin
             }
 
             if (state is SchedulerState.PausingFisher
+                or SchedulerState.PausingFisherForRepair
                 or SchedulerState.SelectingCombatJob
                 or SchedulerState.EquippingCombatJob
                 or SchedulerState.StartingDuty)
@@ -212,6 +215,17 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             case SchedulerState.Reconciling:
                 TickReconciling(now);
+                break;
+            case SchedulerState.PausingFisherForRepair:
+                if (fisher is { } repairPausingFisher)
+                    TickPausingFisherForRepair(now, repairPausingFisher);
+                else if (Elapsed(now) > TimeSpan.FromSeconds(20))
+                    BeginFisherRestore("MissFisher 在修理暂停阶段失联，开始恢复");
+                else
+                    status = "等待 MissFisher IPC 确认修理前暂停";
+                break;
+            case SchedulerState.RepairingFisherGear:
+                TickRepairingFisherGear(now);
                 break;
             case SchedulerState.PausingFisher:
                 if (fisher is { } pausingFisher)
@@ -282,6 +296,9 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        if (TryBeginFisherGearRepair(fisher, autoDuty))
+            return;
+
         var requiredGapSeconds = GetRequiredGapSeconds();
         var validRemaining = TryResolveWindowRemaining(now, fisher, out var remainingSeconds, out var timeSource);
         lastResolvedRemainingSeconds = validRemaining ? remainingSeconds : null;
@@ -348,6 +365,139 @@ public sealed class Plugin : IDalamudPlugin
             timeSource);
         commandManager.ProcessCommand("/mf pause");
         Transition(SchedulerState.PausingFisher, "正在暂停 MissFisher");
+    }
+
+    private bool TryBeginFisherGearRepair(MissFisherSnapshot fisher, AutoDutySnapshot autoDuty)
+    {
+        lowestFisherGearPercent = null;
+        if (!configuration.RepairFisherGear
+            || !playerState.IsLoaded
+            || playerState.ClassJob.RowId != FisherJobId
+            || !EquipmentDurability.TryGetLowestEquippedPercent(out var lowestPercent))
+            return false;
+
+        lowestFisherGearPercent = lowestPercent;
+        var repairThreshold = configuration.FisherRepairThresholdPercent;
+        if (ipc.TryGetAutoDutyRepairSettings(out var selfRepair, out var autoDutyThreshold) && selfRepair)
+            repairThreshold = Math.Min(repairThreshold, autoDutyThreshold);
+        if (lowestPercent > repairThreshold)
+            return false;
+
+        var urgent = lowestPercent <= 0.01f;
+        var safeFishingGap = fisher.IsWaiting
+            && !fisher.IsWindowActive
+            && !fisher.IsInWindow
+            && !fisher.IsAutoPreparing;
+        if (!urgent && !safeFishingGap)
+        {
+            status = $"捕鱼装备最低耐久 {lowestPercent:F0}%，等待钓鱼空档后修理";
+            return true;
+        }
+
+        if (fisher.IsPaused)
+        {
+            status = $"捕鱼装备最低耐久 {lowestPercent:F0}%；MissFisher 已手动暂停，不自动修理";
+            return true;
+        }
+
+        if (!autoDuty.IsStopped || autoDuty.IsLooping)
+        {
+            status = $"捕鱼装备最低耐久 {lowestPercent:F0}%，等待 AutoDuty 空闲后修理";
+            return true;
+        }
+
+        if (!IsSafeForGearsetChange())
+        {
+            status = $"捕鱼装备最低耐久 {lowestPercent:F0}%，等待角色可操作后修理";
+            return true;
+        }
+
+        if (configuration.DryRun)
+        {
+            status = $"捕鱼装备最低耐久 {lowestPercent:F0}%；只观察模式不会修理";
+            return true;
+        }
+
+        fisherGearsetId = jobSelector.CurrentGearsetId;
+        if (fisherGearsetId is null)
+        {
+            Fail("修理前无法读取当前捕鱼套装");
+            return true;
+        }
+
+        cycleChecklistId = configuration.MissFisherChecklistId;
+        cycleChecklistName = configuration.MissFisherChecklistName.Trim();
+        cycleResumeKind = configuration.MissFisherResumeKind;
+        managedFisherPause = true;
+        autoDutyOwned = false;
+        stopRequested = false;
+        configuration.Checkpoint.Active = true;
+        PersistCheckpoint();
+
+        if (fisher.IsRunning)
+        {
+            commandManager.ProcessCommand("/mf pause");
+            Transition(SchedulerState.PausingFisherForRepair, $"捕鱼装备最低耐久 {lowestPercent:F0}%，正在暂停 MissFisher");
+        }
+        else
+        {
+            StartFisherGearRepair(lowestPercent);
+        }
+
+        return true;
+    }
+
+    private void TickPausingFisherForRepair(DateTime now, MissFisherSnapshot fisher)
+    {
+        if (fisher.IsPaused || !fisher.IsRunning)
+        {
+            var percent = EquipmentDurability.TryGetLowestEquippedPercent(out var current) ? current : 0;
+            StartFisherGearRepair(percent);
+            return;
+        }
+
+        if (Elapsed(now) > TimeSpan.FromSeconds(20))
+            Fail("MissFisher 未在 20 秒内进入修理暂停状态");
+    }
+
+    private void StartFisherGearRepair(float lowestPercent)
+    {
+        commandManager.ProcessCommand("/ad repair");
+        Transition(SchedulerState.RepairingFisherGear, $"捕鱼装备最低耐久 {lowestPercent:F0}%，已请求 AutoDuty 修理");
+    }
+
+    private void TickRepairingFisherGear(DateTime now)
+    {
+        if (!EquipmentDurability.TryGetLowestEquippedPercent(out var lowestPercent))
+        {
+            status = "正在等待捕鱼装备耐久数据";
+            if (Elapsed(now) > TimeSpan.FromMinutes(10))
+                FailFisherGearRepair("十分钟内未能确认捕鱼装备修理完成");
+            return;
+        }
+
+        lowestFisherGearPercent = lowestPercent;
+        var completionThreshold = configuration.FisherRepairThresholdPercent;
+        if (ipc.TryGetAutoDutyRepairSettings(out var selfRepair, out var autoDutyThreshold) && selfRepair)
+            completionThreshold = Math.Min(completionThreshold, autoDutyThreshold);
+        if (lowestPercent > completionThreshold)
+        {
+            log.Information("Fisher gear repair completed; lowest durability is {Percent:F0}%", lowestPercent);
+            Transition(SchedulerState.ResumingFisher, $"捕鱼装备已修理，最低耐久 {lowestPercent:F0}%");
+            return;
+        }
+
+        status = $"正在修理捕鱼装备；当前最低耐久 {lowestPercent:F0}%";
+        if (Elapsed(now) > TimeSpan.FromMinutes(10))
+            FailFisherGearRepair("AutoDuty 十分钟内未完成捕鱼装备修理；请检查金币或修理设置");
+    }
+
+    private void FailFisherGearRepair(string message)
+    {
+        managedFisherPause = false;
+        configuration.Checkpoint = new CycleCheckpoint();
+        FailTerminal(message);
+        SaveConfiguration();
     }
 
     private void TickPausingFisher(DateTime now, MissFisherSnapshot fisher)
@@ -1204,6 +1354,23 @@ public sealed class Plugin : IDalamudPlugin
             SaveConfiguration();
         }
 
+        var repairFisherGear = configuration.RepairFisherGear;
+        if (ImGui.Checkbox("自动维护捕鱼装备", ref repairFisherGear))
+        {
+            configuration.RepairFisherGear = repairFisherGear;
+            SaveConfiguration();
+        }
+
+        if (configuration.RepairFisherGear)
+        {
+            var repairThreshold = configuration.FisherRepairThresholdPercent;
+            if (ImGui.SliderInt("捕鱼装备修理阈值", ref repairThreshold, 1, 99, "%d%%"))
+            {
+                configuration.FisherRepairThresholdPercent = repairThreshold;
+                SaveConfiguration();
+            }
+        }
+
         var excludedSummary = configuration.ExcludedDutyTerritories.Count == 0
             ? "未排除副本"
             : $"已排除 {configuration.ExcludedDutyTerritories.Count} 个副本";
@@ -1272,6 +1439,8 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.TextUnformatted($"当前目标剩余：未知（{lastWindowTimeSource}）");
         if (trackedWindowStartUtc is not null)
             ImGui.TextUnformatted($"调度估算剩余：{FormatDuration(GetTrackedRemainingSeconds(DateTime.UtcNow))}");
+        if (lowestFisherGearPercent is { } durability)
+            ImGui.TextUnformatted($"捕鱼装备最低耐久：{durability:F0}%");
         if (selectedJob is { } job)
             ImGui.TextUnformatted($"战斗套装：{job.GearsetName} / {job.Level}级 / i{job.ItemLevel}");
         if (selectedDuty is { } activeDuty)

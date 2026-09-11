@@ -4,6 +4,8 @@ internal enum SchedulerState
 {
     Idle,
     Reconciling,
+    PausingFisherForRepair,
+    RepairingFisherGear,
     PausingFisher,
     SelectingCombatJob,
     EquippingCombatJob,
