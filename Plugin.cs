@@ -39,6 +39,8 @@ public sealed class Plugin : IDalamudPlugin
     private bool managedFisherPause;
     private bool dutyWasObservedRunning;
     private bool autoDutyOwned;
+    private bool inventoryFullFallbackCycle;
+    private bool observedMissFisherRunning;
     private DateTime? autoDutyStartUtc;
     private string cycleChecklistId = string.Empty;
     private string cycleChecklistName = string.Empty;
@@ -94,7 +96,7 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
         configuration.FisherRepairThresholdPercent = Math.Clamp(configuration.FisherRepairThresholdPercent, 1, 99);
-        configuration.Version = 5;
+        configuration.Version = 6;
         configuration.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
         jobSelector = new JobSelector(dataManager, playerState);
@@ -290,11 +292,16 @@ public sealed class Plugin : IDalamudPlugin
         if (!configuration.Enabled)
             return;
 
+        UpdateInventoryFullFallback(fisher);
+
         if (!ipc.TryGetAutoDuty(out var autoDuty))
         {
             status = "等待 AutoDuty IPC";
             return;
         }
+
+        if (TryHandleInventoryFullFallback(fisher, autoDuty))
+            return;
 
         if (TryBeginFisherGearRepair(fisher, autoDuty))
             return;
@@ -354,6 +361,7 @@ public sealed class Plugin : IDalamudPlugin
         cycleChecklistName = configuration.MissFisherChecklistName.Trim();
         cycleResumeKind = configuration.MissFisherResumeKind;
         managedFisherPause = true;
+        inventoryFullFallbackCycle = false;
         autoDutyOwned = false;
         autoDutyStartUtc = null;
         configuration.Checkpoint.Active = true;
@@ -365,6 +373,121 @@ public sealed class Plugin : IDalamudPlugin
             timeSource);
         commandManager.ProcessCommand("/mf pause");
         Transition(SchedulerState.PausingFisher, "正在暂停 MissFisher");
+    }
+
+    private void UpdateInventoryFullFallback(MissFisherSnapshot fisher)
+    {
+        if (fisher.IsRunning)
+        {
+            observedMissFisherRunning = true;
+            if (configuration.InventoryFullFallbackActive)
+            {
+                configuration.InventoryFullFallbackActive = false;
+                SaveConfiguration();
+                log.Information("MissFisher is running again; inventory-full fallback cleared");
+            }
+            return;
+        }
+
+        if (!configuration.ContinueDutiesWhenInventoryFull)
+        {
+            configuration.InventoryFullFallbackActive = false;
+            return;
+        }
+
+        if (!configuration.InventoryFullFallbackActive
+            && observedMissFisherRunning
+            && InventoryCapacity.TryGetEmptyBagSlots(out var emptySlots)
+            && emptySlots == 0)
+        {
+            observedMissFisherRunning = false;
+            configuration.InventoryFullFallbackActive = true;
+            SaveConfiguration();
+            log.Warning("MissFisher stopped while the main inventory was full; duty fallback activated");
+        }
+    }
+
+    private bool TryHandleInventoryFullFallback(MissFisherSnapshot fisher, AutoDutySnapshot autoDuty)
+    {
+        if (!configuration.ContinueDutiesWhenInventoryFull
+            || !configuration.InventoryFullFallbackActive
+            || fisher.IsRunning)
+            return false;
+
+        if (!InventoryCapacity.TryGetEmptyBagSlots(out var emptySlots))
+        {
+            status = "背包满兜底已激活，等待背包数据";
+            return true;
+        }
+
+        if (emptySlots > 0)
+        {
+            if (targetReader.TryStartResumeTarget(
+                    configuration.MissFisherResumeKind,
+                    configuration.MissFisherChecklistId,
+                    configuration.MissFisherChecklistName,
+                    out var failureMessage))
+            {
+                status = $"背包已有 {emptySlots} 个空格，正在恢复 MissFisher“{configuration.MissFisherChecklistName}”";
+                log.Information(
+                    "Inventory has {EmptySlots} empty slots; restarted MissFisher {Checklist}",
+                    emptySlots,
+                    configuration.MissFisherChecklistName);
+                configuration.InventoryFullFallbackActive = false;
+                SaveConfiguration();
+            }
+            else
+            {
+                status = $"背包已有空格，但恢复 MissFisher 失败：{failureMessage}";
+            }
+            return true;
+        }
+
+        if (!autoDuty.IsStopped || autoDuty.IsLooping)
+        {
+            status = "背包已满；等待 AutoDuty 空闲";
+            return true;
+        }
+
+        if (!playerState.IsLoaded || playerState.ClassJob.RowId != FisherJobId)
+        {
+            status = "背包已满；等待切回捕鱼职业";
+            return true;
+        }
+
+        if (!IsSafeForGearsetChange())
+        {
+            status = "背包已满；等待角色可安全切换套装";
+            return true;
+        }
+
+        if (configuration.DryRun)
+        {
+            status = "背包已满；只观察模式不会启动 AutoDuty";
+            return true;
+        }
+
+        fisherGearsetId = jobSelector.CurrentGearsetId;
+        if (fisherGearsetId is null)
+        {
+            Fail("背包满兜底调度无法读取当前捕鱼套装");
+            return true;
+        }
+
+        failedGearsets.Clear();
+        selectedJob = null;
+        trackedWindowStartUtc = null;
+        cycleChecklistId = configuration.MissFisherChecklistId;
+        cycleChecklistName = configuration.MissFisherChecklistName.Trim();
+        cycleResumeKind = configuration.MissFisherResumeKind;
+        managedFisherPause = true;
+        inventoryFullFallbackCycle = true;
+        autoDutyOwned = false;
+        stopRequested = false;
+        configuration.Checkpoint.Active = true;
+        PersistCheckpoint();
+        Transition(SchedulerState.SelectingCombatJob, "MissFisher 因背包满停止，继续 AutoDuty 调度");
+        return true;
     }
 
     private bool TryBeginFisherGearRepair(MissFisherSnapshot fisher, AutoDutySnapshot autoDuty)
@@ -769,6 +892,18 @@ public sealed class Plugin : IDalamudPlugin
             fisher?.SecondsUntilNextWindow ?? double.NaN);
 
         if (!stopRequested
+            && inventoryFullFallbackCycle
+            && configuration.RepeatWhileWindowIsFar
+            && InventoryCapacity.TryGetEmptyBagSlots(out var emptySlots)
+            && emptySlots == 0)
+        {
+            selectedJob = null;
+            failedGearsets.Clear();
+            Transition(SchedulerState.SelectingCombatJob, "背包仍满，准备下一轮");
+            return;
+        }
+
+        if (!stopRequested
             && configuration.RepeatWhileWindowIsFar
             && double.IsFinite(trackedRemaining)
             && trackedRemaining > GetRequiredGapSeconds())
@@ -840,6 +975,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickResumingFisher(DateTime now, MissFisherSnapshot? fisher)
     {
+        if (inventoryFullFallbackCycle
+            && InventoryCapacity.TryGetEmptyBagSlots(out var emptySlots)
+            && emptySlots == 0)
+        {
+            CompleteCycle("背包仍满，保持 AutoDuty 兜底调度");
+            return;
+        }
+
         if (!managedFisherPause)
         {
             CompleteCycle("任务完成；MissFisher 并非由调度器暂停");
@@ -1047,6 +1190,7 @@ public sealed class Plugin : IDalamudPlugin
         autoDutyOwned = checkpoint.AutoDutyOwned;
         autoDutyStartUtc = checkpoint.AutoDutyStartUtc;
         dutyWasObservedRunning = checkpoint.DutyWasObservedRunning;
+        inventoryFullFallbackCycle = checkpoint.InventoryFullFallbackCycle;
         selectedDuty = checkpoint.ExpectedDutyTerritoryId is { } territoryId
             ? DutyCatalog.Find(territoryId)
             : null;
@@ -1073,6 +1217,7 @@ public sealed class Plugin : IDalamudPlugin
         checkpoint.ManagedFisherPause = managedFisherPause;
         checkpoint.AutoDutyOwned = autoDutyOwned;
         checkpoint.DutyWasObservedRunning = dutyWasObservedRunning;
+        checkpoint.InventoryFullFallbackCycle = inventoryFullFallbackCycle;
         checkpoint.ExpectedDutyTerritoryId = selectedDuty?.TerritoryId;
         checkpoint.ChecklistId = cycleChecklistId;
         checkpoint.ChecklistName = cycleChecklistName;
@@ -1371,6 +1516,15 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
 
+        var continueWhenInventoryFull = configuration.ContinueDutiesWhenInventoryFull;
+        if (ImGui.Checkbox("背包满时继续 AutoDuty 调度", ref continueWhenInventoryFull))
+        {
+            configuration.ContinueDutiesWhenInventoryFull = continueWhenInventoryFull;
+            if (!continueWhenInventoryFull)
+                configuration.InventoryFullFallbackActive = false;
+            SaveConfiguration();
+        }
+
         var excludedSummary = configuration.ExcludedDutyTerritories.Count == 0
             ? "未排除副本"
             : $"已排除 {configuration.ExcludedDutyTerritories.Count} 个副本";
@@ -1458,7 +1612,7 @@ public sealed class Plugin : IDalamudPlugin
         if (ImGui.Button("快速测试 MissFisher 恢复（不进副本）"))
             StartRecoveryTest();
 
-        ImGui.TextWrapped("职业规则：选择等级最低的 15-99 级正式战斗职业；同等级按套装顺序。青魔法师会被排除。副本从未排除且存在 AutoDuty 路径的候选中按等级由高到低尝试。返回捕鱼职业后，如果原会话已丢失，调度器会重新启动所选的 MissFisher 图鉴、分组或合集。");
+        ImGui.TextWrapped("职业规则：选择等级最低的 15-99 级正式战斗职业；同等级按套装顺序。青魔法师会被排除。副本从未排除且存在 AutoDuty 路径的候选中按等级由高到低尝试。返回捕鱼职业后，如果原会话已丢失，调度器会重新启动所选的 MissFisher 图鉴、分组或合集。MissFisher 因背包满停止时，可继续运行副本；清出背包空间后自动恢复钓鱼。");
         ImGui.End();
     }
 

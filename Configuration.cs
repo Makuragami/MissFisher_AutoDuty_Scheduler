@@ -4,7 +4,7 @@ namespace FisherDutyScheduler;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 5;
+    public int Version { get; set; } = 6;
     public bool Enabled { get; set; }
     public bool DryRun { get; set; } = true;
     public int WaitThresholdMinutes { get; set; } = 40;
@@ -15,6 +15,8 @@ public sealed class Configuration : IPluginConfiguration
     public int SafetyMarginMinutes { get; set; } = 10;
     public bool RepairFisherGear { get; set; } = true;
     public int FisherRepairThresholdPercent { get; set; } = 30;
+    public bool ContinueDutiesWhenInventoryFull { get; set; } = true;
+    public bool InventoryFullFallbackActive { get; set; }
     public string MissFisherChecklistId { get; set; } = "ef950191-84e7-40ff-87ab-8d56f9d29572";
     public string MissFisherChecklistName { get; set; } = "新合集";
     public MissFisherResumeKind MissFisherResumeKind { get; set; } = MissFisherResumeKind.Collection;
@@ -33,6 +35,7 @@ public sealed class CycleCheckpoint
     public bool ManagedFisherPause { get; set; }
     public bool AutoDutyOwned { get; set; }
     public bool DutyWasObservedRunning { get; set; }
+    public bool InventoryFullFallbackCycle { get; set; }
     public uint? ExpectedDutyTerritoryId { get; set; }
     public string ChecklistId { get; set; } = string.Empty;
     public string ChecklistName { get; set; } = string.Empty;
