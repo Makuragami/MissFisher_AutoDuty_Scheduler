@@ -79,6 +79,8 @@ public sealed class Plugin : IDalamudPlugin
         var previousConfigurationVersion = configuration.Version;
         configuration.ExcludedDutyTerritories ??= [];
         configuration.ExcludedDutyTerritories = configuration.ExcludedDutyTerritories.Distinct().ToList();
+        configuration.ExcludedJobIds ??= [];
+        configuration.ExcludedJobIds = configuration.ExcludedJobIds.Distinct().ToList();
         if (previousConfigurationVersion < 3 && !configuration.ExcludedDutyTerritories.Contains(978))
             configuration.ExcludedDutyTerritories.Add(978);
         if (previousConfigurationVersion < 4)
@@ -96,7 +98,7 @@ public sealed class Plugin : IDalamudPlugin
             }
         }
         configuration.FisherRepairThresholdPercent = Math.Clamp(configuration.FisherRepairThresholdPercent, 1, 99);
-        configuration.Version = 6;
+        configuration.Version = 7;
         configuration.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
         jobSelector = new JobSelector(dataManager, playerState);
@@ -657,7 +659,11 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        if (!jobSelector.TryGetEligibleCombatGearsets(LevelCap, failedGearsets, out var candidates))
+        if (!jobSelector.TryGetEligibleCombatGearsets(
+                LevelCap,
+                failedGearsets,
+                configuration.ExcludedJobIds.ToHashSet(),
+                out var candidates))
         {
             jobDataUnavailableSinceUtc ??= now;
             emptyCandidateSinceUtc = null;
@@ -1550,6 +1556,31 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.EndCombo();
         }
 
+        var excludedJobsSummary = configuration.ExcludedJobIds.Count == 0
+            ? "不排除职业"
+            : $"已排除 {configuration.ExcludedJobIds.Count} 个职业";
+        if (ImGui.BeginCombo("排除职业（可多选）", excludedJobsSummary))
+        {
+            foreach (var jobOption in jobSelector.GetSupportedCombatJobs())
+            {
+                var excluded = configuration.ExcludedJobIds.Contains(jobOption.JobId);
+                if (!ImGui.Checkbox($"{jobOption.Name}##job-{jobOption.JobId}", ref excluded))
+                    continue;
+
+                if (excluded)
+                {
+                    if (!configuration.ExcludedJobIds.Contains(jobOption.JobId))
+                        configuration.ExcludedJobIds.Add(jobOption.JobId);
+                }
+                else
+                {
+                    configuration.ExcludedJobIds.RemoveAll(id => id == jobOption.JobId);
+                }
+                SaveConfiguration();
+            }
+            ImGui.EndCombo();
+        }
+
         var resumePreview = string.IsNullOrWhiteSpace(configuration.MissFisherChecklistName)
             ? "请选择"
             : configuration.MissFisherChecklistName;
@@ -1612,7 +1643,7 @@ public sealed class Plugin : IDalamudPlugin
         if (ImGui.Button("快速测试 MissFisher 恢复（不进副本）"))
             StartRecoveryTest();
 
-        ImGui.TextWrapped("职业规则：选择等级最低的 15-99 级正式战斗职业；同等级按套装顺序。青魔法师会被排除。副本从未排除且存在 AutoDuty 路径的候选中按等级由高到低尝试。返回捕鱼职业后，如果原会话已丢失，调度器会重新启动所选的 MissFisher 图鉴、分组或合集。MissFisher 因背包满停止时，可继续运行副本；清出背包空间后自动恢复钓鱼。");
+        ImGui.TextWrapped("职业规则：从未排除的 15-99 级正式战斗职业中选择等级最低者；同等级按套装顺序。青魔法师固定排除。副本从未排除且存在 AutoDuty 路径的候选中按等级由高到低尝试。返回捕鱼职业后，如果原会话已丢失，调度器会重新启动所选的 MissFisher 图鉴、分组或合集。MissFisher 因背包满停止时，可继续运行副本；清出背包空间后自动恢复钓鱼。");
         ImGui.End();
     }
 

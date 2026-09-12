@@ -4,7 +4,7 @@ namespace FisherDutyScheduler;
 
 public sealed class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 6;
+    public int Version { get; set; } = 7;
     public bool Enabled { get; set; }
     public bool DryRun { get; set; } = true;
     public int WaitThresholdMinutes { get; set; } = 40;
@@ -21,6 +21,7 @@ public sealed class Configuration : IPluginConfiguration
     public string MissFisherChecklistName { get; set; } = "新合集";
     public MissFisherResumeKind MissFisherResumeKind { get; set; } = MissFisherResumeKind.Collection;
     public List<uint> ExcludedDutyTerritories { get; set; } = [978];
+    public List<uint> ExcludedJobIds { get; set; } = [];
     public CycleCheckpoint Checkpoint { get; set; } = new();
 }
 

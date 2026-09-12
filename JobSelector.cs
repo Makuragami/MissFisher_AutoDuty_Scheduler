@@ -27,6 +27,7 @@ internal sealed class JobSelector(IDataManager dataManager, IPlayerState playerS
     public unsafe bool TryGetEligibleCombatGearsets(
         int levelCap,
         ISet<int> excludedGearsets,
+        ISet<uint> excludedJobs,
         out IReadOnlyList<JobCandidate> candidates)
     {
         var result = new List<JobCandidate>();
@@ -50,7 +51,7 @@ internal sealed class JobSelector(IDataManager dataManager, IPlayerState playerS
 
             validGearsetCount++;
             var jobId = (uint)entry->ClassJob;
-            if (!SupportedCombatJobs.Contains(jobId))
+            if (!SupportedCombatJobs.Contains(jobId) || excludedJobs.Contains(jobId))
                 continue;
 
             var job = sheet.GetRow(jobId);
@@ -79,6 +80,15 @@ internal sealed class JobSelector(IDataManager dataManager, IPlayerState playerS
         return validGearsetCount > 0;
     }
 
+    public IReadOnlyList<JobOption> GetSupportedCombatJobs()
+    {
+        var sheet = dataManager.GetExcelSheet<ClassJob>();
+        return SupportedCombatJobs
+            .Select(jobId => new JobOption(jobId, sheet.GetRow(jobId).Name.ToString()))
+            .OrderBy(job => job.JobId)
+            .ToArray();
+    }
+
     public unsafe bool Equip(int gearsetId)
     {
         var module = RaptureGearsetModule.Instance();
@@ -92,3 +102,5 @@ internal readonly record struct JobCandidate(
     int Level,
     int ItemLevel,
     string GearsetName);
+
+internal readonly record struct JobOption(uint JobId, string Name);
