@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "Fisher Duty Scheduler",
     "InternalName": "FisherDutyScheduler",
-    "AssemblyVersion": "0.7.3.0",
+    "AssemblyVersion": "0.7.4.0",
     "Description": "在 MissFisher 的钓鱼等待间隙调用 AutoDuty，并在时间不足或流程结束后恢复所选钓鱼目标。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisher_AutoDuty_Scheduler",
@@ -21,7 +21,7 @@
     "LoadPriority": 0,
     "Punchline": "协调 MissFisher 钓鱼间隙与 AutoDuty 的自动化调度插件。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.7.3\n- 增加战斗职业排除选项，可多选不参与练级调度的职业。\n- 职业排除按职业 ID 保存，不受套装名称或套装顺序变化影响。\n\n# v0.7.2\n- MissFisher 因背包物品上限停止时，继续使用 AutoDuty 进行副本调度。\n- 背包清出空间后自动恢复所选 MissFisher 目标。\n- 增加“背包满时继续 AutoDuty 调度”开关。\n\n# v0.7.1\n- 适配 MissFisher 2.3.1.0。\n- 更新当前目标窗口、内置分组和自定义合集的读取映射。\n\n# v0.7.0\n- 增加捕鱼装备耐久监控与自动维护。\n- 在安全钓鱼空档暂停 MissFisher，并调用 AutoDuty 的修理流程。\n- 修理完成后自动继续或重启所选钓鱼目标。\n",
+    "ChangeLog": "# v0.7.4\n- 适配 MissFisher 2.4.0.0。\n- 更新当前目标窗口、内置分组、自定义合集和恢复启动入口的兼容映射。\n- 保留对旧版 MissFisher 的兼容。\n\n# v0.7.3\n- 增加战斗职业排除选项，可多选不参与练级调度的职业。\n- 职业排除按职业 ID 保存，不受套装名称或套装顺序变化影响。\n\n# v0.7.2\n- MissFisher 因背包物品上限停止时，继续使用 AutoDuty 进行副本调度。\n- 背包清出空间后自动恢复所选 MissFisher 目标。\n- 增加“背包满时继续 AutoDuty 调度”开关。\n\n# v0.7.1\n- 适配 MissFisher 2.3.1.0。\n- 更新当前目标窗口、内置分组和自定义合集的读取映射。\n\n# v0.7.0\n- 增加捕鱼装备耐久监控与自动维护。\n- 在安全钓鱼空档暂停 MissFisher，并调用 AutoDuty 的修理流程。\n- 修理完成后自动继续或重启所选钓鱼目标。\n",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisher_AutoDuty_Scheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisher_AutoDuty_Scheduler/refs/heads/main/latest.zip"
   }

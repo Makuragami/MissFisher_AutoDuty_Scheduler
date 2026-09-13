@@ -22,7 +22,7 @@
 ## 依赖
 
 - XIVLauncherCN / Dalamud API 15
-- MissFisher 2.2.4.1、2.3.0.1 或 2.3.0.2
+- MissFisher 2.2.4.1、2.3.0.1、2.3.0.2、2.3.1.0 或 2.4.0.0
 - AutoDuty
 - vnavmesh，以及 AutoDuty 正常运行所需的战斗与路径插件
 
@@ -42,7 +42,7 @@ MissFisher 内部接口可能随版本变化。升级 MissFisher 后如果恢复
 3. 打开插件安装器，搜索并安装 **Fisher Duty Scheduler**。
 4. 输入 `/fds` 打开配置窗口。
 
-也可以下载 [FisherDutyScheduler 0.7.3](release/FisherDutyScheduler-0.7.3.zip)，解压后将 `FisherDutyScheduler.dll` 添加为开发插件。
+也可以下载最新的 [`latest.zip`](latest.zip)，解压后将 `FisherDutyScheduler.dll` 添加为开发插件。
 
 首次使用时建议保持“只观察”开启，确认插件显示的 MissFisher 剩余时间和触发状态正确，再进行受监督测试。
 
@@ -82,6 +82,20 @@ NPC 修理需要足够金币；自修需要对应等级的生产职业和暗物�
 ```powershell
 .\build.ps1
 ```
+
+开发测试时建议只在 Dalamud 的开发插件列表中添加一次下面这个 DLL：
+
+```text
+bin\x64\Release\FisherDutyScheduler.dll
+```
+
+以后每次更新运行 `build.ps1`，这个固定路径会被覆盖，回到游戏后重新加载插件即可，不需要重新查找或解压 ZIP。也可以让脚本自动复制到你指定的插件目录；第一次执行时指定目录，之后会自动记住：
+
+```powershell
+.\build.ps1 -DeployPath 'D:\你的开发插件目录'
+```
+
+脚本还会在项目根目录生成始终最新的 `latest.zip`，用于需要手动导入或分享的场景。
 
 也可以显式指定 `dotnet.exe`：
 
